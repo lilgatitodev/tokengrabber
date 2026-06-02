@@ -9,7 +9,7 @@ https://www.virustotal.com/gui/file/09194315e1781e9fdec20df40fff0c48324e835e2ba9
 ![exe](avtests/exe.png)
 https://www.virustotal.com/gui/file/3882aa69540f0fbb829794acfc004b6cac8163ceee962394d950360c5c77dd44?nocache=1
 # VIRUSTOTAL - python obfuscated
-![pythonobf](avtests/pythonobf.png)
+![pyobf](avtests/pythonobf.png)
 https://www.virustotal.com/gui/file/ff0455408df861a23a344a3a3490ced2b7fcbb5f95c192b7081ef11394065a5f
 # VIRUSTOTAL - exe obfuscated
 ![exeobf](avtests/exeobf.png)
