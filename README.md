@@ -7,7 +7,7 @@ at the time of posting this an exe output from this grabber is able to be ran on
 ## VIRUSTOTAL - python unobfuscated
 ![python](avtests/python.png)
 https://www.virustotal.com/gui/file/09194315e1781e9fdec20df40fff0c48324e835e2ba9d613e035cfdc8a03765c
-# VIRUSTOTAL - exe unobfuscated
+## VIRUSTOTAL - exe unobfuscated
 ![exe](avtests/exe.png)
 https://www.virustotal.com/gui/file/3882aa69540f0fbb829794acfc004b6cac8163ceee962394d950360c5c77dd44?nocache=1
 ## VIRUSTOTAL - python obfuscated
