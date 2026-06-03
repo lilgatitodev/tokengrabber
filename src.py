@@ -1,5 +1,5 @@
-# THE CREATOR AND OWNER OF THIS CODE IS AstraaDev (https://github.com/AstraaDev/)
-# this is a fork of the code MINIMALLY edited by lilgatito for:
+# THE ORIGINAL CREATOR AND OWNER OF THIS CODE IS AstraaDev (https://github.com/AstraaDev/)
+# this is a fork of the code edited by lilgatito for:
 #   as little post-run detectability as possible
 #   as little possibility of discord banning your ass after seeing the webhook
 #   removing of unnescassery parts and simplifying code
