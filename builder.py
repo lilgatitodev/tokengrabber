@@ -46,7 +46,7 @@ def main():
 
     # obfuscate
     subprocess.run(
-        ["python", "crypt.py", f"{outputfilename}.py"],
+        ["python", "crypt.py", "--nuitka", f"{outputfilename}.py"],
         cwd=base_dir,
         check=True,
     )
