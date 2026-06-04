@@ -4,6 +4,8 @@ this is a modified and expanded version of AstraaDev's token grabber code with a
 
 at the time of posting this an exe output from this grabber is able to be ran on Windows 11 Pro with no issue while all windows defender protections are on, works perfectly too.
 
+## output showcase
+i realised after uploading this that my ip is lowkenuinley there but idrc cuz dynamic ip and shizzle
 ![outputexample](avtests/outputexample.png)
 
 ## VIRUSTOTAL - python unobfuscated
