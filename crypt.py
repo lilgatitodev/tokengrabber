@@ -96,6 +96,48 @@ def encrypt(plaintext, passphrase, iterations, inner_prefix, outer_prefix, bindi
     return salt_outer + outer_token
 
 
+def _extract_imports(source_text):
+    try:
+        tree = ast.parse(source_text)
+    except SyntaxError:
+        return []
+    out = []
+    seen = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                key = ("import", alias.name)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(f"import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.level != 0 or not node.module:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    key = ("from*", node.module)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(f"from {node.module} import *")
+                else:
+                    key = ("from", node.module, alias.name)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(f"from {node.module} import {alias.name}")
+    return out
+
+
+def _emit_nuitka_hints(imports, fn_name):
+    if not imports:
+        return ""
+    lines = [f"def {fn_name}():", "    try:"]
+    for imp in imports:
+        lines.append(f"        {imp}")
+    lines.append("    except Exception:")
+    lines.append("        pass")
+    return "\n".join(lines)
+
+
 def strip_docstrings(source):
     tree = ast.parse(source)
     class _S(ast.NodeTransformer):
@@ -325,7 +367,9 @@ def _emit_execution_helpers(p):
     ])
 
 
-def _emit_binding(p):
+def _emit_binding(p, use_binding=True):
+    if not use_binding:
+        return f"{p.var_binding} = b''"
     parts = " + ".join(f"{fn}.__code__.co_code" for fn in [p.fn_execute, p.fn_materialize, p.fn_stage_outer, p.fn_stage_inner, p.fn_compute_binding])
     return "\n".join([
         f"def {p.fn_compute_binding}() -> bytes:",
@@ -367,8 +411,10 @@ def _emit_main(p):
     ])
 
 
-def render_loader(payload, source_name, password_value, profile):
+def render_loader(payload, source_name, password_value, profile, use_binding=True, imports=None):
     p = profile
+    hint_fn_name = "_" + secrets.token_hex(4)
+    hints_section = _emit_nuitka_hints(imports or [], hint_fn_name)
     parts = [
         "from __future__ import annotations",
         "import argparse, base64, dataclasses, enum, functools, hashlib, io, logging, os, sys, typing, zlib",
@@ -387,11 +433,12 @@ def render_loader(payload, source_name, password_value, profile):
         _emit_stages(p),
         _emit_pipeline_runner(p),
         _emit_execution_helpers(p),
-        _emit_binding(p),
+        _emit_binding(p, use_binding=use_binding),
+        hints_section,
         _emit_cli_helpers(p),
         _emit_main(p),
     ]
-    return "\n".join(parts) + "\n"
+    return "\n".join(part for part in parts if part) + "\n"
 
 
 def _extract_binding(loader_source, profile):
@@ -411,32 +458,51 @@ def _extract_binding(loader_source, profile):
     return bytes(value)
 
 
-def obfuscate(source_text, source_name):
+def obfuscate(source_text, source_name, nuitka_mode=False):
+    use_binding = not nuitka_mode
+    imports = _extract_imports(source_text) if nuitka_mode else []
     source = strip_docstrings(source_text)
     compressed = zlib.compress(source.encode("utf-8"), 9)
     p = new_polymorph()
     inner_prefix = bytes([p.prefix_inner_val])
     outer_prefix = bytes([p.prefix_outer_val])
     password = secrets.token_urlsafe(24)
-    placeholder = render_loader(b"", source_name, password, p)
-    binding = _extract_binding(placeholder, p)
+    if use_binding:
+        placeholder = render_loader(b"", source_name, password, p, use_binding=True, imports=imports)
+        binding = _extract_binding(placeholder, p)
+    else:
+        binding = b""
     encrypted = encrypt(compressed, password.encode("utf-8"), p.pbkdf2_iterations, inner_prefix, outer_prefix, binding)
-    return render_loader(encrypted, source_name, password, p)
+    return render_loader(encrypted, source_name, password, p, use_binding=use_binding, imports=imports)
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.stderr.write("usage: crypt.py inputfile.py\n")
+    args = sys.argv[1:]
+    nuitka_mode = False
+    if "--nuitka" in args:
+        args.remove("--nuitka")
+        nuitka_mode = True
+    if "--no-binding" in args:
+        args.remove("--no-binding")
+        nuitka_mode = True
+    if len(args) != 1:
+        sys.stderr.write("usage: crypt.py [--nuitka] inputfile.py\n")
         return 2
-    input_path = Path(sys.argv[1])
+    input_path = Path(args[0])
     if not input_path.is_file():
         sys.stderr.write(f"crypt.py: not a file: {input_path}\n")
         return 2
     output_path = input_path.with_name(input_path.stem + "_obf.py")
     source = input_path.read_text(encoding="utf-8")
-    loader = obfuscate(source, input_path.name)
+    loader = obfuscate(source, input_path.name, nuitka_mode=nuitka_mode)
     output_path.write_text(loader, encoding="utf-8")
     print(output_path)
+    if nuitka_mode:
+        sys.stderr.write(
+            "nuitka mode: bytecode-binding disabled, original-script imports baked in for static discovery.\n"
+            "build with:\n"
+            f"  nuitka --onefile --include-package=cryptography {output_path}\n"
+        )
     return 0
 
 
