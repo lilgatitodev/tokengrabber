@@ -8,6 +8,12 @@ at the time of posting this an exe output from this grabber is able to be ran on
 i realised after uploading this that my ip is lowkenuinley there but idrc cuz dynamic ip and shizzle
 ![outputexample](avtests/outputexample.png)
 
+## todo
+- discord injection (maybe
+- chrome password decryption is fucked up on profiles other than Defualt
+- builder.py prompt for setting custom persistance values (ez peezy im just lazy)
+- since its persistant now i should prolly make an uninstaller
+
 ## VIRUSTOTAL - python unobfuscated
 ![python](avtests/python.png)
 https://www.virustotal.com/gui/file/09194315e1781e9fdec20df40fff0c48324e835e2ba9d613e035cfdc8a03765c
