@@ -1,6 +1,7 @@
 public discord token grabbers suck.  
 they are too detectable and get you banned on discord within like a week  
 this is a modified and expanded version of AstraaDev's token grabber code with a nuitka builder and obfuscator added  
+![tuff banner](avtests/gaytoegrabber.webp)
 
 at the time of posting this an exe output from this grabber is able to be ran on Windows 11 Pro with no issue while all windows defender protections are on, works perfectly too.
 
