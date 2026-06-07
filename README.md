@@ -1,4 +1,4 @@
-![tuff banner](avtests/gaytoegrabber.webp)
+![tuff banner](avtests/avtests/IMG_0463.webp)
 public discord token grabbers suck.  
 they are too detectable and get you banned on discord within like a week  
 this is a modified and expanded version of AstraaDev's token grabber code with a nuitka builder and obfuscator added  
